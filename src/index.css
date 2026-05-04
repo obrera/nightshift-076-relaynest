@@ -20,7 +20,8 @@ h1 { font-size: clamp(3rem, 9vw, 7rem); line-height: .82; margin: .4rem 0 1.2rem
 .auth-strip div { display: grid; gap: .25rem; }
 .wallet-picker { position: relative; display: flex; gap: .5rem; align-items: center; }
 .wallet-menu { position: absolute; z-index: 20; top: calc(100% + .5rem); left: 0; min-width: 220px; padding: .6rem; border: 1px solid rgba(111, 255, 218, .2); border-radius: 20px; background: rgba(5, 16, 14, .98); box-shadow: 0 24px 80px rgba(0, 0, 0, .45); display: grid; gap: .45rem; }
-.wallet-menu button { width: 100%; text-align: left; }
+.wallet-menu button { width: 100%; text-align: left; display: flex; gap: .45rem; align-items: center; }
+.wallet-menu img { width: 1.15rem; height: 1.15rem; border-radius: .3rem; }
 .wallet-menu span { color: #f8b344; font-size: .85rem; font-weight: 800; }
 .runtime-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: .75rem; margin: 1rem 0; }
 .runtime-grid > div { padding: 1rem; display: grid; gap: .35rem; }

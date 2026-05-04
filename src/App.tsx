@@ -1,7 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { StandardConnect, WalletUiAuth, type UiWallet, type WalletUiAuthState, getWalletFeature, useWalletUi } from '@wallet-ui/react'
-import type { WalletAccount } from '@wallet-standard/base'
-import { getOrCreateUiWalletAccountForStandardWalletAccount_DO_NOT_USE_OR_YOU_WILL_BE_FIRED as getOrCreateUiWalletAccount, getWalletForHandle_DO_NOT_USE_OR_YOU_WILL_BE_FIRED as getWalletForHandle } from '@wallet-standard/ui-registry'
+import { Component, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { WalletUiAuth, WalletUiIcon, type UiWallet, type WalletUiAuthState, useWalletUi, useWalletUiWallet } from '@wallet-ui/react'
 
 type Session = { walletAddress: string; role: 'operator' | 'volunteer'; handle: string }
 type Bootstrap = { ok: boolean; session: Session | null; runtime: { ready: boolean; build: string; publicBaseUrl: string; solanaRpcUrl: string; mplCoreProgramAddress: string; mplCorePackageRequired: boolean; minting: { enabled: boolean; disclosure: string } } }
@@ -20,43 +18,10 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
 }
 function short(value?: string | null) { return value ? `${value.slice(0, 4)}…${value.slice(-4)}` : 'unassigned' }
 function minutesUntil(value: string) { return Math.round((new Date(value).getTime() - Date.now()) / 60000) }
-function isWalletAvailable(wallet: UiWallet) {
-  try {
-    getWalletForHandle(wallet)
-    return wallet.features.includes(StandardConnect)
-  } catch {
-    return false
-  }
-}
 
 function SafeWalletPicker() {
   const walletUi = useWalletUi()
   const [open, setOpen] = useState(false)
-  const [pendingWallet, setPendingWallet] = useState<string | null>(null)
-  const [walletError, setWalletError] = useState<string | null>(null)
-  const availableWallets = useMemo(() => walletUi.wallets.filter(isWalletAvailable), [walletUi.wallets])
-
-  async function connectWallet(wallet: UiWallet) {
-    setPendingWallet(wallet.name)
-    setWalletError(null)
-    try {
-      const standardWallet = getWalletForHandle(wallet)
-      const connectFeature = getWalletFeature(wallet, StandardConnect) as { connect: () => Promise<{ accounts: WalletAccount[] }> }
-      const { accounts } = await connectFeature.connect()
-      const [firstAccount] = accounts.map((account) => getOrCreateUiWalletAccount(standardWallet, account))
-      if (!firstAccount) {
-        setWalletError(`${wallet.name} did not return an account`)
-        return
-      }
-      walletUi.connect(firstAccount)
-      setOpen(false)
-    } catch (error) {
-      console.warn('wallet connect failed', error)
-      setWalletError(`${wallet.name} is unavailable`)
-    } finally {
-      setPendingWallet(null)
-    }
-  }
 
   if (walletUi.connected) {
     return (
@@ -72,17 +37,56 @@ function SafeWalletPicker() {
       <button onClick={() => setOpen((value) => !value)}>Select Wallet</button>
       {open ? (
         <div className="wallet-menu">
-          {availableWallets.length ? availableWallets.map((availableWallet) => (
-            <button key={availableWallet.name} disabled={pendingWallet === availableWallet.name} onClick={() => void connectWallet(availableWallet)}>
-              {pendingWallet === availableWallet.name ? 'Connecting...' : availableWallet.name}
-            </button>
+          {walletUi.wallets.length ? walletUi.wallets.map((availableWallet) => (
+            <WalletPickerItemBoundary key={availableWallet.name} wallet={availableWallet} onConnected={() => setOpen(false)} />
           )) : (
             <button onClick={() => window.open('https://solana.com/solana-wallets', '_blank')}>Install a Solana wallet</button>
           )}
-          {walletError ? <span>{walletError}</span> : null}
         </div>
       ) : null}
     </div>
+  )
+}
+
+class WalletPickerItemBoundary extends Component<{ onConnected: () => void; wallet: UiWallet }, { unavailable: boolean }> {
+  state = { unavailable: false }
+
+  componentDidCatch(error: unknown) {
+    console.warn('wallet connect unavailable', error)
+    this.setState({ unavailable: true })
+  }
+
+  render() {
+    if (this.state.unavailable) {
+      return (
+        <button disabled>
+          <WalletUiIcon wallet={this.props.wallet} />
+          <span>{this.props.wallet.name} unavailable</span>
+        </button>
+      )
+    }
+
+    return <WalletPickerItem onConnected={this.props.onConnected} wallet={this.props.wallet} />
+  }
+}
+
+function WalletPickerItem({ onConnected, wallet }: { onConnected: () => void; wallet: UiWallet }) {
+  const { connect, isConnecting } = useWalletUiWallet({ wallet })
+  return (
+    <button
+      disabled={isConnecting}
+      onClick={async () => {
+        try {
+          await connect()
+          onConnected()
+        } catch (error) {
+          console.warn('wallet connect failed', error)
+        }
+      }}
+    >
+      <WalletUiIcon wallet={wallet} />
+      <span>{isConnecting ? 'Connecting...' : wallet.name}</span>
+    </button>
   )
 }
 
