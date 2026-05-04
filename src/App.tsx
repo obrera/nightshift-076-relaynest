@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { WalletUiAuth, WalletUiDropdown, type WalletUiAuthState, useWalletUi } from '@wallet-ui/react'
+import { StandardConnect, WalletUiAuth, type UiWallet, type WalletUiAuthState, getWalletFeature, useWalletUi } from '@wallet-ui/react'
+import type { WalletAccount } from '@wallet-standard/base'
+import { getOrCreateUiWalletAccountForStandardWalletAccount_DO_NOT_USE_OR_YOU_WILL_BE_FIRED as getOrCreateUiWalletAccount, getWalletForHandle_DO_NOT_USE_OR_YOU_WILL_BE_FIRED as getWalletForHandle } from '@wallet-standard/ui-registry'
 
 type Session = { walletAddress: string; role: 'operator' | 'volunteer'; handle: string }
 type Bootstrap = { ok: boolean; session: Session | null; runtime: { ready: boolean; build: string; publicBaseUrl: string; solanaRpcUrl: string; mplCoreProgramAddress: string; mplCorePackageRequired: boolean; minting: { enabled: boolean; disclosure: string } } }
@@ -18,6 +20,71 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
 }
 function short(value?: string | null) { return value ? `${value.slice(0, 4)}…${value.slice(-4)}` : 'unassigned' }
 function minutesUntil(value: string) { return Math.round((new Date(value).getTime() - Date.now()) / 60000) }
+function isWalletAvailable(wallet: UiWallet) {
+  try {
+    getWalletForHandle(wallet)
+    return wallet.features.includes(StandardConnect)
+  } catch {
+    return false
+  }
+}
+
+function SafeWalletPicker() {
+  const walletUi = useWalletUi()
+  const [open, setOpen] = useState(false)
+  const [pendingWallet, setPendingWallet] = useState<string | null>(null)
+  const [walletError, setWalletError] = useState<string | null>(null)
+  const availableWallets = useMemo(() => walletUi.wallets.filter(isWalletAvailable), [walletUi.wallets])
+
+  async function connectWallet(wallet: UiWallet) {
+    setPendingWallet(wallet.name)
+    setWalletError(null)
+    try {
+      const standardWallet = getWalletForHandle(wallet)
+      const connectFeature = getWalletFeature(wallet, StandardConnect) as { connect: () => Promise<{ accounts: WalletAccount[] }> }
+      const { accounts } = await connectFeature.connect()
+      const [firstAccount] = accounts.map((account) => getOrCreateUiWalletAccount(standardWallet, account))
+      if (!firstAccount) {
+        setWalletError(`${wallet.name} did not return an account`)
+        return
+      }
+      walletUi.connect(firstAccount)
+      setOpen(false)
+    } catch (error) {
+      console.warn('wallet connect failed', error)
+      setWalletError(`${wallet.name} is unavailable`)
+    } finally {
+      setPendingWallet(null)
+    }
+  }
+
+  if (walletUi.connected) {
+    return (
+      <div className="wallet-picker">
+        <button onClick={() => walletUi.copy()}>{short(walletUi.account?.address)}</button>
+        <button onClick={() => walletUi.disconnect()}>Disconnect</button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="wallet-picker">
+      <button onClick={() => setOpen((value) => !value)}>Select Wallet</button>
+      {open ? (
+        <div className="wallet-menu">
+          {availableWallets.length ? availableWallets.map((availableWallet) => (
+            <button key={availableWallet.name} disabled={pendingWallet === availableWallet.name} onClick={() => void connectWallet(availableWallet)}>
+              {pendingWallet === availableWallet.name ? 'Connecting...' : availableWallet.name}
+            </button>
+          )) : (
+            <button onClick={() => window.open('https://solana.com/solana-wallets', '_blank')}>Install a Solana wallet</button>
+          )}
+          {walletError ? <span>{walletError}</span> : null}
+        </div>
+      ) : null}
+    </div>
+  )
+}
 
 function App() {
   const walletUi = useWalletUi()
@@ -127,7 +194,7 @@ function App() {
           <span>Wallet connect / SIWS</span>
           <strong>{session ? `${session.handle} · ${short(session.walletAddress)}` : 'not signed in'}</strong>
         </div>
-        <WalletUiDropdown />
+        <SafeWalletPicker />
         {session ? (
           <button onClick={() => void logout()}>Sign out</button>
         ) : wallet ? (

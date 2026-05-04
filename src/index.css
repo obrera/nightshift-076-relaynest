@@ -18,6 +18,10 @@ h1 { font-size: clamp(3rem, 9vw, 7rem); line-height: .82; margin: .4rem 0 1.2rem
 .beacon { width: 56px; height: 56px; border-radius: 50%; background: #12d6b2; box-shadow: 0 0 0 12px rgba(18, 214, 178, .12), 0 0 60px #12d6b2; }
 .auth-strip { display: flex; gap: .75rem; flex-wrap: wrap; align-items: center; justify-content: space-between; padding: 1rem; margin: 1rem 0; }
 .auth-strip div { display: grid; gap: .25rem; }
+.wallet-picker { position: relative; display: flex; gap: .5rem; align-items: center; }
+.wallet-menu { position: absolute; z-index: 20; top: calc(100% + .5rem); left: 0; min-width: 220px; padding: .6rem; border: 1px solid rgba(111, 255, 218, .2); border-radius: 20px; background: rgba(5, 16, 14, .98); box-shadow: 0 24px 80px rgba(0, 0, 0, .45); display: grid; gap: .45rem; }
+.wallet-menu button { width: 100%; text-align: left; }
+.wallet-menu span { color: #f8b344; font-size: .85rem; font-weight: 800; }
 .runtime-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: .75rem; margin: 1rem 0; }
 .runtime-grid > div { padding: 1rem; display: grid; gap: .35rem; }
 .runtime-grid strong { font-size: 1.1rem; overflow-wrap: anywhere; }
@@ -52,4 +56,4 @@ textarea { min-height: 82px; resize: vertical; }
 .volunteers p, .audit p { display: grid; gap: .15rem; padding: .7rem 0; border-bottom: 1px solid rgba(255,255,255,.06); margin: 0; }
 .volunteers span, .audit span { color: #a9c8bf; }
 @media (max-width: 900px) { .hero, .forms, .ops { grid-template-columns: 1fr; } .runtime-grid { grid-template-columns: repeat(2, 1fr); } .board { grid-template-columns: 1fr; overflow: visible; } .lane { min-height: auto; } h1 { font-size: 4rem; } }
-@media (max-width: 520px) { main { padding: .65rem; } .auth-strip { align-items: stretch; } .auth-strip button { width: 100%; } .runtime-grid, .split { grid-template-columns: 1fr; } .hero > div:first-child, .status-tower, form, .ops > div { border-radius: 20px; } }
+@media (max-width: 520px) { main { padding: .65rem; } .auth-strip { align-items: stretch; } .auth-strip button, .wallet-picker { width: 100%; } .wallet-menu { position: static; width: 100%; } .runtime-grid, .split { grid-template-columns: 1fr; } .hero > div:first-child, .status-tower, form, .ops > div { border-radius: 20px; } }
