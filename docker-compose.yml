@@ -7,7 +7,13 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://relaynest076.colmena.dev}
       SOLANA_RPC_URL: ${SOLANA_RPC_URL:-https://api.devnet.solana.com}
       DATABASE_PATH: /data/relaynest.db
+    networks:
+      dokploy-network:
+        ipv4_address: 10.0.1.210
     volumes:
       - relaynest-data:/data
+networks:
+  dokploy-network:
+    external: true
 volumes:
   relaynest-data:
