@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { WalletUiAuth, WalletUiDropdown, type WalletUiAuthState, useWalletUi } from '@wallet-ui/react'
 
 type Session = { walletAddress: string; role: 'operator' | 'volunteer'; handle: string }
 type Bootstrap = { ok: boolean; session: Session | null; runtime: { ready: boolean; build: string; publicBaseUrl: string; solanaRpcUrl: string; mplCoreProgramAddress: string; mplCorePackageRequired: boolean; minting: { enabled: boolean; disclosure: string } } }
@@ -7,8 +8,6 @@ type Volunteer = { id: number; walletAddress: string; handle: string; zone: stri
 type Suggestion = { relayCode: string; candidates: Array<Volunteer & { score: number }> }
 type Audit = { id: number; actor_wallet: string; action: string; target: string; note: string; created_at: string }
 
-const operatorWallet = 'BpCGZxZmKcJuCL6b6nU2MHmwgiwc818E8syJVAbxivz8'
-const fieldWallet = '9uozm5nKTGe9pqRtCKRud3GUoCzTcQpcHZoZrfvyNk2L'
 const lanes = ['open', 'matched', 'claimed', 'completed', 'escalated']
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
@@ -21,6 +20,8 @@ function short(value?: string | null) { return value ? `${value.slice(0, 4)}…$
 function minutesUntil(value: string) { return Math.round((new Date(value).getTime() - Date.now()) / 60000) }
 
 function App() {
+  const walletUi = useWalletUi()
+  const wallet = walletUi.wallet
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null)
   const [relays, setRelays] = useState<Relay[]>([])
   const [volunteers, setVolunteers] = useState<Volunteer[]>([])
@@ -54,11 +55,42 @@ function App() {
 
   useEffect(() => { void refresh() }, [refresh])
 
-  async function signIn(walletAddress: string) {
-    const nonce = await api<{ statement: string; nonce: string }>('/api/auth/nonce', { method: 'POST', body: JSON.stringify({ walletAddress }) })
-    setStatus(`SIWS prepared: ${nonce.statement}`)
-    await api('/api/auth/demo', { method: 'POST', body: JSON.stringify({ walletAddress }) })
+  async function handleSignIn(auth: WalletUiAuthState) {
+    if (!walletUi.connected || !walletUi.account || !auth.canSignIn) {
+      setStatus('connect a SIWS-capable wallet first')
+      return
+    }
+
+    const nonce = await api<{ domain: string; statement: string; nonce: string; uri: string }>('/api/auth/nonce', {
+      method: 'POST',
+      body: JSON.stringify({ walletAddress: walletUi.account.address }),
+    })
+    setStatus('requesting wallet signature')
+    const result = await auth.signIn({
+      input: {
+        domain: nonce.domain,
+        requestId: nonce.nonce,
+        statement: nonce.statement,
+        uri: nonce.uri,
+      },
+    })
+    await api('/api/auth/verify', {
+      method: 'POST',
+      body: JSON.stringify({
+        accountAddress: result.account.address,
+        input: result.input,
+        method: result.method,
+        signature: Array.from(result.signature),
+        signedMessage: Array.from(result.signedMessage),
+      }),
+    })
+    setStatus(`signed in with ${short(result.account.address)}`)
     await refresh()
+  }
+  async function logout() {
+    await api('/api/auth/logout', { method: 'POST' })
+    await refresh()
+    setStatus('signed out')
   }
   async function createRelay() {
     await api('/api/relays', { method: 'POST', body: JSON.stringify(relayForm) })
@@ -92,11 +124,23 @@ function App() {
 
       <section className="auth-strip">
         <div>
-          <span>Wallet / SIWS path</span>
+          <span>Wallet connect / SIWS</span>
           <strong>{session ? `${session.handle} · ${short(session.walletAddress)}` : 'not signed in'}</strong>
         </div>
-        <button onClick={() => void signIn(operatorWallet)}>Demo operator wallet</button>
-        <button onClick={() => void signIn(fieldWallet)}>Demo field wallet</button>
+        <WalletUiDropdown />
+        {session ? (
+          <button onClick={() => void logout()}>Sign out</button>
+        ) : wallet ? (
+          <WalletUiAuth wallet={wallet}>
+            {(auth) => (
+              <button disabled={!walletUi.connected || !auth.canSignIn} onClick={() => void handleSignIn(auth)}>
+                Sign in with Solana
+              </button>
+            )}
+          </WalletUiAuth>
+        ) : (
+          <button disabled>Connect wallet to sign in</button>
+        )}
         <button onClick={() => void navigator.clipboard?.writeText(bootstrap?.runtime.mplCoreProgramAddress ?? '')}>Copy MPL Core program</button>
       </section>
 

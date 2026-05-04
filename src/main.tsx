@@ -1,10 +1,17 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { WalletUi, createSolanaDevnet, createWalletUiConfig } from '@wallet-ui/react'
 import App from './App'
 import './index.css'
 
+const walletConfig = createWalletUiConfig({
+  clusters: [createSolanaDevnet(import.meta.env.VITE_SOLANA_RPC_URL || 'https://api.devnet.solana.com')],
+})
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <WalletUi config={walletConfig}>
+      <App />
+    </WalletUi>
   </StrictMode>,
 )

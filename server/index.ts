@@ -9,6 +9,7 @@ import { serveStatic } from '@hono/node-server/serve-static'
 import { serve } from '@hono/node-server'
 import { z } from 'zod'
 import { MPL_CORE_PROGRAM_ADDRESS } from '@obrera/mpl-core-kit-lib'
+import { getBase58Encoder, signatureBytes, verifySignature } from '@solana/kit'
 
 type Session = { id: number; walletAddress: string; role: 'operator' | 'volunteer'; handle: string }
 type RelayRow = { id: number; code: string; title: string; zone: string; pickup: string; dropoff: string; urgency: number; requestedBy: string; status: string; neededBy: string; details: string; volunteerId: number | null; claimedBy: string | null; createdAt: string; updatedAt: string }
@@ -39,6 +40,7 @@ function migrate() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, wallet_address TEXT UNIQUE NOT NULL, handle TEXT NOT NULL, role TEXT NOT NULL, last_seen_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires_at TEXT NOT NULL, created_at TEXT NOT NULL, FOREIGN KEY (user_id) REFERENCES users(id));
+    CREATE TABLE IF NOT EXISTS auth_nonces (nonce TEXT PRIMARY KEY, wallet_address TEXT, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT);
     CREATE TABLE IF NOT EXISTS relays (id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT UNIQUE NOT NULL, title TEXT NOT NULL, zone TEXT NOT NULL, pickup TEXT NOT NULL, dropoff TEXT NOT NULL, urgency INTEGER NOT NULL, requested_by TEXT NOT NULL, status TEXT NOT NULL, needed_by TEXT NOT NULL, details TEXT NOT NULL, volunteer_id INTEGER, claimed_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS volunteers (id INTEGER PRIMARY KEY AUTOINCREMENT, wallet_address TEXT NOT NULL, handle TEXT NOT NULL, zone TEXT NOT NULL, capacity INTEGER NOT NULL, transport TEXT NOT NULL, available_until TEXT NOT NULL, status TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, actor_wallet TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, note TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -72,6 +74,26 @@ migrate(); seed()
 const app = new Hono()
 const relaySchema = z.object({ title: z.string().min(3).max(80), zone: z.string().min(2).max(40), pickup: z.string().min(2).max(80), dropoff: z.string().min(2).max(80), urgency: z.number().int().min(1).max(5), requestedBy: z.string().min(2).max(60), neededByMinutes: z.number().int().min(10).max(360), details: z.string().min(5).max(500) })
 const volunteerSchema = z.object({ handle: z.string().min(2).max(60), zone: z.string().min(2).max(40), capacity: z.number().int().min(1).max(8), transport: z.string().min(2).max(60), availableMinutes: z.number().int().min(15).max(360) })
+const verifySchema = z.object({
+  accountAddress: z.string().min(32),
+  input: z.object({
+    domain: z.string().min(1),
+    requestId: z.string().min(1),
+    statement: z.string().min(1),
+    uri: z.string().url(),
+  }),
+  method: z.string().min(1),
+  signature: z.array(z.number().int().min(0).max(255)).length(64),
+  signedMessage: z.array(z.number().int().min(0).max(255)).min(1),
+})
+
+function buildNonce() { return randomBytes(18).toString('hex') }
+function parseSiwsMessage(bytes: Uint8Array) { return new TextDecoder().decode(bytes) }
+async function verifyWalletSignature(walletAddress: string, signatureData: Uint8Array, message: Uint8Array) {
+  const publicKeyBytes = getBase58Encoder().encode(walletAddress)
+  const publicKey = await crypto.subtle.importKey('raw', publicKeyBytes, { name: 'Ed25519' }, true, ['verify'])
+  return verifySignature(publicKey, signatureBytes(signatureData), message)
+}
 function getSessionRow(token?: string): Session | null {
   if (!token) { return null }
   const row = db.prepare('SELECT users.id, users.wallet_address as walletAddress, users.role, users.handle FROM sessions JOIN users ON users.id = sessions.user_id WHERE sessions.token = ? AND sessions.expires_at > ?').get(token, nowIso()) as Session | undefined
@@ -88,7 +110,7 @@ function setSessionForWallet(c: Context, walletAddress: string) {
   const token = randomBytes(24).toString('hex')
   db.prepare('INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)').run(token, user.id, minutesFromNow(60 * 24 * 7), nowIso())
   setCookie(c, sessionCookie, token, { path: '/', httpOnly: true, sameSite: 'Lax', maxAge: 60 * 60 * 24 * 7 })
-  audit(walletAddress, 'sign_in', 'session', 'Wallet completed SIWS-shaped sign-in')
+  audit(walletAddress, 'sign_in', 'session', 'Wallet completed verified SIWS sign-in')
 }
 function relays() { return (db.prepare('SELECT * FROM relays ORDER BY urgency DESC, needed_by ASC').all() as Record<string, unknown>[]).map(snakeToCamelRelay) }
 function volunteers() { return (db.prepare('SELECT * FROM volunteers ORDER BY status ASC, available_until ASC').all() as Record<string, unknown>[]).map(snakeToCamelVolunteer) }
@@ -111,8 +133,45 @@ app.get('/health', (c) => c.json({ ok: true, service: 'relaynest', build: '076',
 app.get('/ready', (c) => c.json({ ok: true, runtime: runtimePayload() }))
 app.get('/api/health', (c) => c.json({ ok: true, service: 'relaynest', build: '076', checkedAt: nowIso() }))
 app.get('/api/bootstrap', (c) => c.json({ ok: true, session: sessionPayload(c), runtime: runtimePayload() }))
-app.post('/api/auth/nonce', async (c) => { const { walletAddress } = z.object({ walletAddress: z.string().min(20) }).parse(await c.req.json().catch(() => ({}))); return c.json({ domain: new URL(publicBaseUrl).host, nonce: randomUUID(), statement: `Sign in to RelayNest dispatch board with wallet ${walletAddress}`, uri: publicBaseUrl }) })
-app.post('/api/auth/demo', async (c) => { const { walletAddress } = z.object({ walletAddress: z.string().min(20) }).parse(await c.req.json().catch(() => ({}))); setSessionForWallet(c, walletAddress); return c.json({ ok: true, session: sessionPayload(c) }) })
+app.post('/api/auth/nonce', async (c) => {
+  const { walletAddress } = z.object({ walletAddress: z.string().min(20) }).parse(await c.req.json().catch(() => ({})))
+  const nonce = buildNonce()
+  db.prepare('INSERT INTO auth_nonces (nonce, wallet_address, created_at, expires_at, used_at) VALUES (?, ?, ?, ?, NULL)').run(nonce, walletAddress, nowIso(), minutesFromNow(10))
+  return c.json({ domain: new URL(publicBaseUrl).host, nonce, statement: 'Sign in to RelayNest and bind this wallet to the dispatch relay board.', uri: publicBaseUrl })
+})
+app.post('/api/auth/verify', async (c) => {
+  const body = verifySchema.parse(await c.req.json())
+  if (body.method !== 'solana:signIn') {
+    return c.json({ error: 'Wallet must use SIWS native sign-in' }, 400)
+  }
+  const nonceRow = db.prepare('SELECT nonce, wallet_address, expires_at, used_at FROM auth_nonces WHERE nonce = ?').get(body.input.requestId) as { nonce: string; wallet_address: string | null; expires_at: string; used_at: string | null } | undefined
+  if (!nonceRow || nonceRow.used_at || nonceRow.expires_at <= nowIso()) {
+    return c.json({ error: 'Nonce is invalid or expired' }, 400)
+  }
+  if (nonceRow.wallet_address && nonceRow.wallet_address !== body.accountAddress) {
+    return c.json({ error: 'Wallet address mismatch for nonce' }, 400)
+  }
+  const signedMessage = Uint8Array.from(body.signedMessage)
+  const signature = Uint8Array.from(body.signature)
+  const verified = await verifyWalletSignature(body.accountAddress, signature, signedMessage)
+  if (!verified) {
+    return c.json({ error: 'Signature verification failed' }, 400)
+  }
+  const messageText = parseSiwsMessage(signedMessage)
+  const expectedDomain = new URL(publicBaseUrl).host
+  const messageChecks = [
+    messageText.includes(expectedDomain),
+    messageText.includes(body.input.requestId),
+    messageText.includes(body.accountAddress),
+    messageText.includes(body.input.statement),
+  ]
+  if (messageChecks.includes(false)) {
+    return c.json({ error: 'SIWS message content failed validation' }, 400)
+  }
+  db.prepare('UPDATE auth_nonces SET used_at = ? WHERE nonce = ?').run(nowIso(), body.input.requestId)
+  setSessionForWallet(c, body.accountAddress)
+  return c.json({ ok: true, session: sessionPayload(c) })
+})
 app.get('/api/session', (c) => c.json({ session: sessionPayload(c) }))
 app.post('/api/auth/logout', (c) => { deleteCookie(c, sessionCookie, { path: '/' }); return c.json({ ok: true }) })
 app.get('/api/relays', (c) => c.json({ relays: relays(), volunteers: volunteers() }))
