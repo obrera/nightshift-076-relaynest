@@ -1,5 +1,5 @@
-import { Component, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { WalletUiAuth, WalletUiIcon, type UiWallet, type WalletUiAuthState, useWalletUi, useWalletUiWallet } from '@wallet-ui/react'
+import { Component, useCallback, useEffect, useMemo, useState, type ErrorInfo, type ReactNode } from 'react'
+import { WalletUiIcon, type UiWallet, type UiWalletAccount, useSignIn, useWalletUi, useWalletUiWallet } from '@wallet-ui/react'
 
 type Session = { walletAddress: string; role: 'operator' | 'volunteer'; handle: string }
 type Bootstrap = { ok: boolean; session: Session | null; runtime: { ready: boolean; build: string; publicBaseUrl: string; solanaRpcUrl: string; mplCoreProgramAddress: string; mplCorePackageRequired: boolean; minting: { enabled: boolean; disclosure: string } } }
@@ -19,28 +19,51 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
 function short(value?: string | null) { return value ? `${value.slice(0, 4)}…${value.slice(-4)}` : 'unassigned' }
 function minutesUntil(value: string) { return Math.round((new Date(value).getTime() - Date.now()) / 60000) }
 
-function SafeWalletPicker() {
+const installWalletsUrl = 'https://solana.com/solana-wallets'
+
+function formatWalletLabel({ account, connected, wallet }: { account?: UiWalletAccount; connected: boolean; wallet?: UiWallet }) {
+  if (!connected) {
+    return 'Select Wallet'
+  }
+  if (account?.address) {
+    return short(account.address)
+  }
+  return wallet?.name ?? 'Connected'
+}
+
+function RelayWalletDialog() {
   const walletUi = useWalletUi()
   const [open, setOpen] = useState(false)
+  const sortedWallets = useMemo(() => [...walletUi.wallets].sort((left, right) => left.name.localeCompare(right.name)), [walletUi.wallets])
+  const label = formatWalletLabel({ account: walletUi.account, connected: walletUi.connected, wallet: walletUi.wallet })
 
   if (walletUi.connected) {
     return (
       <div className="wallet-picker">
-        <button onClick={() => walletUi.copy()}>{short(walletUi.account?.address)}</button>
-        <button onClick={() => walletUi.disconnect()}>Disconnect</button>
+        <button onClick={() => setOpen((value) => !value)}>
+          {walletUi.wallet ? <WalletUiIcon wallet={walletUi.wallet} /> : null}
+          <span>{label}</span>
+        </button>
+        {open ? (
+          <div className="wallet-menu">
+            <button onClick={() => walletUi.copy()}>Copy address</button>
+            <button onClick={() => walletUi.disconnect()}>Disconnect</button>
+            <button onClick={() => setOpen(false)}>Select Wallet</button>
+          </div>
+        ) : null}
       </div>
     )
   }
 
   return (
     <div className="wallet-picker">
-      <button onClick={() => setOpen((value) => !value)}>Select Wallet</button>
+      <button onClick={() => setOpen((value) => !value)}>{label}</button>
       {open ? (
         <div className="wallet-menu">
-          {walletUi.wallets.length ? walletUi.wallets.map((availableWallet) => (
-            <WalletPickerItemBoundary key={availableWallet.name} wallet={availableWallet} onConnected={() => setOpen(false)} />
+          {sortedWallets.length ? sortedWallets.map((availableWallet) => (
+            <WalletDialogWalletItem key={availableWallet.name} onConnected={() => setOpen(false)} wallet={availableWallet} />
           )) : (
-            <button onClick={() => window.open('https://solana.com/solana-wallets', '_blank')}>Install a Solana wallet</button>
+            <button onClick={() => window.open(installWalletsUrl, '_blank', 'noopener,noreferrer')}>Install a Solana wallet</button>
           )}
         </div>
       ) : null}
@@ -48,29 +71,7 @@ function SafeWalletPicker() {
   )
 }
 
-class WalletPickerItemBoundary extends Component<{ onConnected: () => void; wallet: UiWallet }, { unavailable: boolean }> {
-  state = { unavailable: false }
-
-  componentDidCatch(error: unknown) {
-    console.warn('wallet connect unavailable', error)
-    this.setState({ unavailable: true })
-  }
-
-  render() {
-    if (this.state.unavailable) {
-      return (
-        <button disabled>
-          <WalletUiIcon wallet={this.props.wallet} />
-          <span>{this.props.wallet.name} unavailable</span>
-        </button>
-      )
-    }
-
-    return <WalletPickerItem onConnected={this.props.onConnected} wallet={this.props.wallet} />
-  }
-}
-
-function WalletPickerItem({ onConnected, wallet }: { onConnected: () => void; wallet: UiWallet }) {
+function WalletDialogWalletItem({ onConnected, wallet }: { onConnected: () => void; wallet: UiWallet }) {
   const { connect, isConnecting } = useWalletUiWallet({ wallet })
   return (
     <button
@@ -88,6 +89,55 @@ function WalletPickerItem({ onConnected, wallet }: { onConnected: () => void; wa
       <span>{isConnecting ? 'Connecting...' : wallet.name}</span>
     </button>
   )
+}
+
+class RelaySignInBoundary extends Component<{ children: ReactNode }, { error: boolean }> {
+  state = { error: false }
+
+  componentDidCatch(_error: unknown, _info: ErrorInfo) {
+    this.setState({ error: true })
+  }
+
+  render() {
+    if (this.state.error) {
+      return <button disabled>SIWS unavailable</button>
+    }
+
+    return this.props.children
+  }
+}
+
+function RelaySignInButton({ account, refresh, setStatus, wallet }: { account: UiWalletAccount; refresh: () => Promise<void>; setStatus: (status: string) => void; wallet: UiWallet }) {
+  const signIn = useSignIn(wallet)
+
+  async function signInToRelay() {
+    const nonce = await api<{ domain: string; statement: string; nonce: string; uri: string }>('/api/auth/nonce', {
+      method: 'POST',
+      body: JSON.stringify({ walletAddress: account.address }),
+    })
+    const input = {
+      domain: nonce.domain,
+      requestId: nonce.nonce,
+      statement: nonce.statement,
+      uri: nonce.uri,
+    }
+    setStatus('requesting wallet signature')
+    const result = await signIn(input)
+    await api('/api/auth/verify', {
+      method: 'POST',
+      body: JSON.stringify({
+        accountAddress: result.account.address,
+        input,
+        method: 'solana:signIn',
+        signature: Array.from(result.signature),
+        signedMessage: Array.from(result.signedMessage),
+      }),
+    })
+    setStatus(`signed in with ${short(result.account.address)}`)
+    await refresh()
+  }
+
+  return <button onClick={() => void signInToRelay()}>Sign in with Solana</button>
 }
 
 function App() {
@@ -126,38 +176,6 @@ function App() {
 
   useEffect(() => { void refresh() }, [refresh])
 
-  async function handleSignIn(auth: WalletUiAuthState) {
-    if (!walletUi.connected || !walletUi.account || !auth.canSignIn) {
-      setStatus('connect a SIWS-capable wallet first')
-      return
-    }
-
-    const nonce = await api<{ domain: string; statement: string; nonce: string; uri: string }>('/api/auth/nonce', {
-      method: 'POST',
-      body: JSON.stringify({ walletAddress: walletUi.account.address }),
-    })
-    setStatus('requesting wallet signature')
-    const result = await auth.signIn({
-      input: {
-        domain: nonce.domain,
-        requestId: nonce.nonce,
-        statement: nonce.statement,
-        uri: nonce.uri,
-      },
-    })
-    await api('/api/auth/verify', {
-      method: 'POST',
-      body: JSON.stringify({
-        accountAddress: result.account.address,
-        input: result.input,
-        method: result.method,
-        signature: Array.from(result.signature),
-        signedMessage: Array.from(result.signedMessage),
-      }),
-    })
-    setStatus(`signed in with ${short(result.account.address)}`)
-    await refresh()
-  }
   async function logout() {
     await api('/api/auth/logout', { method: 'POST' })
     await refresh()
@@ -198,17 +216,13 @@ function App() {
           <span>Wallet connect / SIWS</span>
           <strong>{session ? `${session.handle} · ${short(session.walletAddress)}` : 'not signed in'}</strong>
         </div>
-        <SafeWalletPicker />
+        <RelayWalletDialog />
         {session ? (
           <button onClick={() => void logout()}>Sign out</button>
-        ) : wallet ? (
-          <WalletUiAuth wallet={wallet}>
-            {(auth) => (
-              <button disabled={!walletUi.connected || !auth.canSignIn} onClick={() => void handleSignIn(auth)}>
-                Sign in with Solana
-              </button>
-            )}
-          </WalletUiAuth>
+        ) : wallet && walletUi.account ? (
+          <RelaySignInBoundary>
+            <RelaySignInButton account={walletUi.account} refresh={refresh} setStatus={setStatus} wallet={wallet} />
+          </RelaySignInBoundary>
         ) : (
           <button disabled>Connect wallet to sign in</button>
         )}
