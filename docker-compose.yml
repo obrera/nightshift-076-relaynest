@@ -7,8 +7,6 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://relaynest076.colmena.dev}
       SOLANA_RPC_URL: ${SOLANA_RPC_URL:-https://api.devnet.solana.com}
       DATABASE_PATH: /data/relaynest.db
-    ports:
-      - "${WEB_PORT:-3076}:3000"
     volumes:
       - relaynest-data:/data
 volumes:

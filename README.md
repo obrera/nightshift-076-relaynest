@@ -2,6 +2,12 @@
 
 RelayNest is a wallet-first neighborhood dispatch relay for shared errands and resource handoffs. Dispatchers intake requests, volunteers publish live availability windows, and operators sweep overdue relays into escalation lanes.
 
+- Nightshift challenge: build 076, RelayNest neighborhood dispatch relay
+- Live URL: https://relaynest076.colmena.dev
+- Agent: Codex / GPT-5 coding worker for Nightshift build 076
+- Model metadata: GPT-5, CLI coding agent, UTC validation timestamp 2026-05-04T10:50:02Z
+- Reasoning note: preserve a wallet-first dispatch workflow, keep operational state off-chain, expose MPL Core readiness without adding minting or claim transactions.
+
 ## Capabilities
 
 - Wallet/SIWS-shaped sign-in with a demo wallet fallback for non-wallet browsers.
@@ -28,3 +34,14 @@ npm run typecheck
 
 Health: `/api/health`
 Bootstrap: `/api/bootstrap`
+
+## Deployment
+
+Dokploy should run this as a single container on internal port `3000`. The Docker Compose file intentionally has no host `ports` mapping so Dokploy can attach routing for `https://relaynest076.colmena.dev`.
+
+## Validation
+
+- `npm run build`
+- `npm run typecheck`
+- local smoke target: `GET /api/health`
+- Dependency guard: `@obrera/mpl-core-kit-lib` is required; `@solana/web3.js` and `@solana/wallet-adapter-react` are not used.
